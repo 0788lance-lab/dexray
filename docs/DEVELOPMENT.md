@@ -123,37 +123,13 @@ results = rpc.batch_get_transactions(signatures[:10])
 - Cache indefinitely (token symbols don't change)
 - Lazy-load unknown mints on first encounter
 
-### Phase 4: Integration with MemeRadar (Day 2)
+### Phase 4: Integration & Validation (Day 2)
 
-**Goal**: Replace Helius Enhanced API calls in memeradar with DexRay.
+**Goal**: Replace Helius Enhanced API calls in your project with DexRay.
 
-#### 4.1 wallet_analyzer.py Migration
-```python
-# Before (Helius Enhanced API):
-r = requests.post(ENHANCED_URL, json=signatures)
-txs = r.json()
-swaps = parse_helius_txs(txs, wallet)
+See [docs/MIGRATION.md](MIGRATION.md) for detailed migration steps and field mapping.
 
-# After (DexRay):
-from dexray.solana import SolanaParser, MultiRPC
-rpc = MultiRPC([...])
-parser = SolanaParser(rpc)
-swaps = parser.parse_wallet(wallet, limit=300)
-```
-
-#### 4.2 paper_trader.py Migration
-```python
-# Before:
-r = requests.post(ENHANCED_URL, json=[sig])
-txs = r.json()
-parsed = parse_helius_txs(txs, wallet)
-
-# After:
-tx = rpc.get_transaction(sig)
-swap = parser.parse_swap(tx, wallet)
-```
-
-#### 4.3 Validation
+#### Validation
 Run both parsers (Helius + DexRay) in parallel for 24h, compare outputs, fix discrepancies.
 
 ### Phase 5: Polish & Open Source (Day 2 Afternoon)

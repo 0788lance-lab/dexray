@@ -72,7 +72,7 @@ pip install dexray
 Or from source:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dexray.git
+git clone https://github.com/0788lance-lab/dexray.git
 cd dexray
 pip install -e .
 ```

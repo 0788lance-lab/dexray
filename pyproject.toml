@@ -36,9 +36,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/dexray"
-Repository = "https://github.com/YOUR_USERNAME/dexray"
-Issues = "https://github.com/YOUR_USERNAME/dexray/issues"
+Homepage = "https://github.com/0788lance-lab/dexray"
+Repository = "https://github.com/0788lance-lab/dexray"
+Issues = "https://github.com/0788lance-lab/dexray/issues"
 
 [tool.setuptools.packages.find]
 include = ["dexray*"]
