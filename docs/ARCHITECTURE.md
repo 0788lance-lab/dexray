@@ -5,7 +5,7 @@
 1. **Standard RPC only** — never depend on proprietary "enhanced" APIs
 2. **Balance-diff approach** — read results (pre/post balances), don't parse instructions
 3. **Multi-provider** — rotate across free RPC providers to maximize throughput
-4. **Chain-agnostic core** — shared interfaces, chain-specific implementations
+4. **Solana-focused** — the only major chain where free swap parsing is a real gap
 
 ## Core Concepts
 

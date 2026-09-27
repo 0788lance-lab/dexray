@@ -1,8 +1,10 @@
 # DexRay
 
-**Decode any DEX swap from raw on-chain transactions. No paid APIs required.**
+**Decode Solana DEX swaps from raw transactions. No paid APIs required.**
 
-DexRay is a lightweight, open-source transaction parser that extracts structured swap data (BUY/SELL, token, amount, PnL) directly from raw blockchain RPC responses — no Helius Enhanced API, no Alchemy Enriched Transactions, no vendor lock-in.
+DexRay is a lightweight, open-source Solana transaction parser that extracts structured swap data (BUY/SELL, token, amount, PnL) directly from standard RPC responses — no Helius Enhanced API, no vendor lock-in.
+
+> **Why Solana only?** EVM chains have standardized Event Logs — any free RPC can parse swaps trivially. Solana is the only major chain where swap parsing requires either a paid proprietary API (Helius) or building your own parser. That's what DexRay does.
 
 ## Why DexRay?
 
@@ -61,14 +63,6 @@ for t in trades:
     print(f"{t['direction']} {t['symbol']} | {t['sol_amount']:.4f} SOL")
 ```
 
-## Supported Chains
-
-| Chain | Status | Module |
-|---|---|---|
-| Solana | **v0.1 — Active** | `dexray.solana` |
-| EVM (ETH/Base/BSC/Arb) | Planned v0.2 | `dexray.evm` |
-| Sui | Planned v0.3 | `dexray.sui` |
-
 ## Installation
 
 ```bash
@@ -96,8 +90,6 @@ dexray/
 │   │   ├── rpc.py           # Multi-RPC client with rotation & retry
 │   │   ├── metadata.py      # Token symbol/decimals resolver
 │   │   └── compat.py        # Helius Enhanced API compatible output (optional)
-│   └── evm/                 # Future: EVM chain support
-│       └── ...
 ├── tests/
 │   ├── test_parser.py
 │   ├── test_rpc.py
