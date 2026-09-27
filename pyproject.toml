@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -32,6 +33,9 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
+
+[project.scripts]
+dexray = "dexray.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/0788lance-lab/dexray"
