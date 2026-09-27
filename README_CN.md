@@ -1,6 +1,6 @@
-# DexRay
+# DexRay — 免费 Solana DEX Swap 解析器
 
-**解析 Solana DEX swap 交易，无需付费 API。**
+**解析 Jupiter、Raydium、Pump.fun、Orca、Meteora 的买卖交易 — 使用免费标准 RPC，可直接替代 Helius Enhanced API。**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -10,9 +10,11 @@
 
 ---
 
-DexRay 是一个轻量 Python 库，通过标准 Solana RPC 调用解析 DEX swap 交易。核心原理：比较 `preTokenBalances` 与 `postTokenBalances` 的差值来检测 BUY/SELL，无需 Helius Enhanced API，无供应商锁定。
+DexRay 是一个 Python 库，可将**任意 Solana DEX swap** 解析为结构化数据（BUY/SELL、代币、金额、盈亏），仅使用免费标准 RPC 调用。核心原理：比较 `preTokenBalances` 与 `postTokenBalances` 的差值 — 无需 Helius Enhanced API，无需付费订阅，无供应商锁定。
 
-> **为什么只做 Solana？** EVM 链有标准化的 Event Logs，任何免费 RPC 都能轻松解析 swap。Solana 是唯一需要付费 API 或自建解析器的主流公链。DexRay 就是解决这个问题的。
+**适用场景：** 交易机器人、钱包分析器、投资组合追踪、跟单交易、聪明钱分析、链上数据分析。
+
+> **为什么只做 Solana？** EVM 链有标准化的 Event Logs，任何免费 RPC 都能轻松解析 swap。Solana 是唯一需要付费 API（Helius $49+/月）或自建解析器的主流公链。DexRay 就是这个解析器 — 免费且开源。
 
 ## 为什么选 DexRay？
 

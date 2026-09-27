@@ -1,6 +1,6 @@
-# DexRay
+# DexRay — Free Solana DEX Swap Parser
 
-**Decode Solana DEX swaps from raw transactions. No paid APIs required.**
+**Parse BUY/SELL swaps from Jupiter, Raydium, Pump.fun, Orca, Meteora — using free standard RPC. Drop-in Helius Enhanced API replacement.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -10,9 +10,11 @@
 
 ---
 
-DexRay is a lightweight Python library that parses Solana DEX swap transactions using only standard RPC calls. It extracts structured swap data (BUY/SELL, token, amount) by comparing `preTokenBalances` vs `postTokenBalances` — no Helius Enhanced API, no vendor lock-in.
+DexRay is a Python library that parses **any Solana DEX swap** into structured data (BUY/SELL, token, amount, PnL) using only free standard RPC calls. It works by comparing `preTokenBalances` vs `postTokenBalances` — no Helius Enhanced API, no paid subscription, no vendor lock-in.
 
-> **Why Solana only?** EVM chains have standardized Event Logs — any free RPC can parse swaps trivially. Solana is the only major chain where swap parsing requires either a paid proprietary API or building your own parser. That's what DexRay does.
+**Use cases:** trading bots, wallet analyzers, portfolio trackers, copy-trading, smart money analysis, on-chain analytics.
+
+> **Why Solana only?** EVM chains have standardized Event Logs — any free RPC can parse swaps trivially. Solana is the only major chain where swap parsing requires either a paid API (Helius $49+/mo) or building your own parser. DexRay is that parser — free and open source.
 
 ## Why DexRay?
 
