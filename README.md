@@ -112,22 +112,49 @@ This works **regardless of which DEX** was used — Jupiter, Raydium, Pump.fun, 
 
 > Swap detection works for **all** DEXes. The table above only affects the `source` label.
 
-## Advanced Usage
+## Recommended RPC Providers
 
-### Custom RPC providers
+DexRay works with **any** Solana RPC. Below are tested free providers (as of Sep 2026):
+
+### No signup required
+
+| Provider | URL | Rate limit |
+|----------|-----|------------|
+| Solana Public | `https://api.mainnet-beta.solana.com` | ~5 RPS |
+| SolanaTracker | `https://rpc.solanatracker.io/public` | Unknown |
+| PublicNode | `https://solana-rpc.publicnode.com` | Unknown |
+
+### Free with signup (no credit card)
+
+| Provider | Free quota | Signup |
+|----------|-----------|--------|
+| **Alchemy** (recommended) | 30M CU/month, 25 RPS | [alchemy.com](https://www.alchemy.com) |
+| **Chainstack** | 3M requests/month, 25 RPS | [chainstack.com](https://chainstack.com) |
+| **Helius** | 1M credits/month, 10 RPS | [helius.dev](https://helius.dev) |
+
+### Known issues
+
+| Provider | Issue |
+|----------|-------|
+| dRPC | Free plan does **not** support Solana (EVM only) |
+| Ankr | Only 16h transaction history — unusable for wallet analysis |
+
+### Recommended setup (production)
 
 ```python
 from dexray import SolanaParser, MultiRPC
 
-# Add multiple free RPC providers for better throughput
 rpc = MultiRPC([
-    "https://api.mainnet-beta.solana.com",
-    "https://solana-mainnet.g.alchemy.com/v2/YOUR_FREE_KEY",
-    "https://lb.drpc.org/ogrpc?network=solana&dkey=YOUR_FREE_KEY",
+    "https://solana-mainnet.g.alchemy.com/v2/YOUR_KEY",     # Alchemy (primary)
+    "https://solana-mainnet.core.chainstack.com/YOUR_KEY",   # Chainstack (backup)
+    "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY",      # Helius (backup)
+    "https://api.mainnet-beta.solana.com",                    # Public (fallback)
 ])
 
 parser = SolanaParser(rpc)
 ```
+
+## Advanced Usage
 
 ### Rate limiting per provider
 

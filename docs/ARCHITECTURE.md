@@ -33,7 +33,7 @@ User Request  ───→  │  MultiRPC   │  ← rotates across providers
                            │
               ┌────────────┼────────────┐
               ▼            ▼            ▼
-         [Solana]     [Alchemy]     [dRPC]     ← free tier providers
+        [Alchemy]   [Chainstack]   [Solana]    ← free tier providers
               │            │            │
               └────────────┼────────────┘
                            ▼

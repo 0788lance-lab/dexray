@@ -28,9 +28,10 @@ from dexray.solana import MultiRPC
 
 # Replace your single Helius key with multiple free providers
 rpc = MultiRPC([
-    "https://lb.drpc.org/ogrpc?network=solana&dkey=YOUR_DRPC_KEY",
-    "https://solana-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY",
-    "https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_KEY",  # keep as one of many
+    "https://solana-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY",     # Alchemy (primary)
+    "https://solana-mainnet.core.chainstack.com/YOUR_CHAINSTACK_KEY", # Chainstack
+    "https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_KEY",       # keep as one of many
+    "https://api.mainnet-beta.solana.com",                            # public fallback
 ])
 ```
 

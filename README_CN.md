@@ -112,22 +112,49 @@ DexRay 不解析 DEX 特有的指令格式，而是直接读取交易的**最终
 
 > Swap 检测对**所有 DEX** 均有效。上表仅影响 `source` 标签。
 
-## 进阶用法
+## 推荐 RPC 提供商
 
-### 自定义 RPC 提供商
+DexRay 支持**任意** Solana RPC。以下为经过实测的免费提供商（截至 2026 年 9 月）：
+
+### 无需注册
+
+| 提供商 | URL | 速率限制 |
+|--------|-----|----------|
+| Solana 公共节点 | `https://api.mainnet-beta.solana.com` | ~5 RPS |
+| SolanaTracker | `https://rpc.solanatracker.io/public` | 未知 |
+| PublicNode | `https://solana-rpc.publicnode.com` | 未知 |
+
+### 免费注册（无需信用卡）
+
+| 提供商 | 免费配额 | 注册 |
+|--------|---------|------|
+| **Alchemy**（推荐） | 30M CU/月，25 RPS | [alchemy.com](https://www.alchemy.com) |
+| **Chainstack** | 3M 请求/月，25 RPS | [chainstack.com](https://chainstack.com) |
+| **Helius** | 1M credits/月，10 RPS | [helius.dev](https://helius.dev) |
+
+### 已知不可用
+
+| 提供商 | 问题 |
+|--------|------|
+| dRPC | 免费计划**不支持 Solana**（仅限 EVM 链） |
+| Ankr | 仅保留 16 小时交易历史 — 无法用于钱包分析 |
+
+### 推荐配置（生产环境）
 
 ```python
 from dexray import SolanaParser, MultiRPC
 
-# 添加多个免费 RPC 提供商以提高吞吐量
 rpc = MultiRPC([
-    "https://api.mainnet-beta.solana.com",
-    "https://solana-mainnet.g.alchemy.com/v2/你的免费KEY",
-    "https://lb.drpc.org/ogrpc?network=solana&dkey=你的免费KEY",
+    "https://solana-mainnet.g.alchemy.com/v2/YOUR_KEY",     # Alchemy（主力）
+    "https://solana-mainnet.core.chainstack.com/YOUR_KEY",   # Chainstack（备用）
+    "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY",      # Helius（备用）
+    "https://api.mainnet-beta.solana.com",                    # 公共节点（兜底）
 ])
 
 parser = SolanaParser(rpc)
 ```
+
+## 进阶用法
 
 ### 按提供商限速
 
