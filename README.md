@@ -2,116 +2,270 @@
 
 **Decode Solana DEX swaps from raw transactions. No paid APIs required.**
 
-DexRay is a lightweight, open-source Solana transaction parser that extracts structured swap data (BUY/SELL, token, amount, PnL) directly from standard RPC responses — no Helius Enhanced API, no vendor lock-in.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-73%20passed-brightgreen.svg)](#testing)
 
-> **Why Solana only?** EVM chains have standardized Event Logs — any free RPC can parse swaps trivially. Solana is the only major chain where swap parsing requires either a paid proprietary API (Helius) or building your own parser. That's what DexRay does.
+[English](README.md) | [中文](README_CN.md)
+
+---
+
+DexRay is a lightweight Python library that parses Solana DEX swap transactions using only standard RPC calls. It extracts structured swap data (BUY/SELL, token, amount) by comparing `preTokenBalances` vs `postTokenBalances` — no Helius Enhanced API, no vendor lock-in.
+
+> **Why Solana only?** EVM chains have standardized Event Logs — any free RPC can parse swaps trivially. Solana is the only major chain where swap parsing requires either a paid proprietary API or building your own parser. That's what DexRay does.
 
 ## Why DexRay?
 
-Every Solana trading bot, portfolio tracker, and wallet analyzer needs to parse DEX swaps. Most depend on paid APIs like Helius Enhanced Transactions ($49+/mo) which have strict rate limits. DexRay removes that dependency:
-
 | | Helius Enhanced API | DexRay |
 |---|---|---|
-| Cost | $49+/mo for reasonable limits | **Free** (uses standard RPC) |
-| Rate limit | 10-50 req/s (paid tier) | **Unlimited** (multi-RPC rotation) |
-| Vendor lock-in | Helius only | **Any Solana RPC provider** |
-| Accuracy | High | **High** (pre/postTokenBalances approach) |
+| Cost | $49+/mo | **Free** (standard RPC) |
+| Rate limit | 10-50 req/s | **Unlimited** (multi-RPC rotation) |
+| Vendor lock-in | Helius only | **Any Solana RPC** |
+| Setup | API key required | **Zero config** |
 | Open source | No | **Yes** |
-
-## How It Works
-
-Instead of relying on proprietary "enhanced" transaction parsing, DexRay uses a simple but robust approach:
-
-1. Fetch raw transaction via standard `getTransaction` RPC (works with ANY provider)
-2. Compare `preTokenBalances` vs `postTokenBalances` to detect token flow
-3. Compare `preBalances` vs `postBalances` to detect SOL/native token flow
-4. Determine swap direction: SOL out + token in = **BUY**, token out + SOL in = **SELL**
-
-This works **regardless of which DEX** was used (Jupiter, Raydium, Pump.fun, Orca, etc.) because we're reading the result, not parsing program-specific instructions.
-
-## Features
-
-- **Zero-dependency parsing** — no paid API keys needed
-- **Multi-RPC rotation** — distribute load across free providers (dRPC, Alchemy, Helius free, etc.)
-- **Universal DEX support** — Jupiter, Raydium, Pump.fun, Orca, Meteora, DFlow, and any future DEX
-- **USDC/USDT swaps** — handles stablecoin quote pairs, not just SOL
-- **Token metadata** — resolve mint addresses to symbols via on-chain metadata
-- **Batch processing** — efficient bulk transaction parsing with rate limiting
-- **Drop-in replacement** — API-compatible with Helius Enhanced Transaction format (optional)
 
 ## Quick Start
 
-```python
-from dexray.solana import SolanaParser, MultiRPC
+### Install
 
-# Set up with multiple free RPC providers
+```bash
+pip install git+https://github.com/0788lance-lab/dexray.git
+```
+
+### Parse a swap in 2 lines
+
+```python
+from dexray import SolanaParser
+
+parser = SolanaParser()  # zero config — uses free Solana public RPC
+
+# Parse a real Jupiter swap (copy-paste this to verify it works)
+swap = parser.parse_swap_by_sig(
+    "29SX7Qi7UCjrDNeBiYG3r7dWMVnMoPkPX5yENdSewtLr3mkX3LKpUGNFsvUxJo2mtV3zjTTSuHWPCn6dZcmEqvJe",
+    wallet="85Z8rgvTwaWVfHb7kHBBuq8uuJdvB72vhXW8oJjP3zC7",
+)
+print(swap)
+# => Swap(direction='BUY', sol_amount=0.03, token_amount=12899.01, source='JUPITER', ...)
+```
+
+### More examples
+
+```python
+# Parse a PumpSwap buy
+swap = parser.parse_swap_by_sig(
+    "3GnMkq8ozGkn2eMRSF7fLykRkwHmtDWxA9U1PHBeKsTU73pjUstQdNWqEhcyYZkTkd7VM7GzJGpJze6vDQxoTQpH",
+    wallet="Fdg75QBKQ7UMMM4hrthGXxYvRCT5qtRAd8hnaXNGqs2K",
+)
+# => Swap(direction='BUY', sol_amount=1.01, token_amount=194259.73, source='PUMPSWAP', ...)
+
+# Parse a Raydium sell
+swap = parser.parse_swap_by_sig(
+    "5s17quVEjwJHtqtMZTo7Q6PLNwJQb3gnUnAhEd1y3p5e3MoWM5Nt7ZbqsZzWgCbWZRaeJ4Yb941BSfUpCuUr6pUM",
+    wallet="6M1RhUfjmojYcY6QXqsDb1geG6Tpz8bzH2C8DRzzY8be",
+)
+# => Swap(direction='SELL', sol_amount=3.26, token_amount=460016.10, source='RAYDIUM_CPMM', ...)
+
+# Batch parse a wallet's recent trades
+trades = parser.parse_wallet("85Z8rgvTwaWVfHb7kHBBuq8uuJdvB72vhXW8oJjP3zC7", limit=50)
+for t in trades:
+    print(f"{t.direction} {t.symbol or t.mint[:8]} | {t.sol_amount:.4f} SOL")
+```
+
+## How It Works
+
+Instead of relying on proprietary "enhanced" transaction parsing, DexRay reads the **result** of any swap:
+
+```
+Raw Transaction (getTransaction RPC)
+  → Compare preTokenBalances vs postTokenBalances
+  → Detect token flow direction
+  → SOL out + token in = BUY
+  → SOL in + token out = SELL
+```
+
+This works **regardless of which DEX** was used — Jupiter, Raydium, Pump.fun, Orca, Meteora, or any future DEX — because we read balance changes, not program-specific instructions.
+
+## Features
+
+- **Zero config** — works out of the box with Solana public RPC, no API keys needed
+- **Multi-RPC rotation** — add multiple free RPC providers for higher throughput
+- **Universal DEX support** — Jupiter, Raydium, Pump.fun, Orca, Meteora, and any future DEX
+- **USDC/USDT pairs** — handles stablecoin quote pairs, not just SOL
+- **Token metadata** — resolve mint addresses to symbols via Jupiter token list
+- **Batch processing** — efficient bulk transaction parsing with rate limiting
+- **Helius compatible** — optional compatibility layer for easy migration
+
+## Supported DEXes
+
+| DEX | Program | Detection |
+|-----|---------|-----------|
+| Jupiter V6 | `JUP6Lkb...` | ✅ |
+| Raydium V4 | `675kPX9...` | ✅ |
+| Raydium CPMM | `CPMMoo8...` | ✅ |
+| Raydium CLMM | `CAMMCzo...` | ✅ |
+| Pump.fun AMM | `6EF8rre...` | ✅ |
+| PumpSwap | `pAMMBay...` | ✅ |
+| Orca Whirlpool | `whirLbM...` | ✅ |
+| Meteora DLMM | `LBUZKhR...` | ✅ |
+| Meteora DAMM V2 | `cpamdpZ...` | ✅ |
+| *Any other DEX* | *Any* | ✅ (detected as UNKNOWN) |
+
+> Swap detection works for **all** DEXes. The table above only affects the `source` label.
+
+## Advanced Usage
+
+### Custom RPC providers
+
+```python
+from dexray import SolanaParser, MultiRPC
+
+# Add multiple free RPC providers for better throughput
 rpc = MultiRPC([
-    "https://api.mainnet-beta.solana.com",              # Solana public
-    "https://solana-mainnet.g.alchemy.com/v2/YOUR_KEY", # Alchemy free
-    "https://lb.drpc.org/ogrpc?network=solana&dkey=KEY", # dRPC free
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-mainnet.g.alchemy.com/v2/YOUR_FREE_KEY",
+    "https://lb.drpc.org/ogrpc?network=solana&dkey=YOUR_FREE_KEY",
 ])
 
 parser = SolanaParser(rpc)
-
-# Parse a single transaction
-swap = parser.parse_swap("5abc123...signature", wallet="DfUwJCaf...")
-# => {"direction": "BUY", "mint": "...", "sol_amount": 0.5, "token_amount": 1000000, ...}
-
-# Batch parse a wallet's recent trades
-trades = parser.parse_wallet("DfUwJCaf...", limit=100)
-for t in trades:
-    print(f"{t['direction']} {t['symbol']} | {t['sol_amount']:.4f} SOL")
 ```
 
-## Installation
+### Rate limiting per provider
 
-```bash
-pip install dexray
+```python
+rpc = MultiRPC([
+    {"url": "https://api.mainnet-beta.solana.com", "rps": 5},
+    {"url": "https://solana-mainnet.g.alchemy.com/v2/KEY", "rps": 25},
+])
 ```
 
-Or from source:
+### Token symbol resolution
 
-```bash
-git clone https://github.com/0788lance-lab/dexray.git
-cd dexray
-pip install -e .
+```python
+from dexray import SolanaParser, TokenResolver
+
+resolver = TokenResolver()  # auto-loads Jupiter token list
+parser = SolanaParser(resolver=resolver)
+
+swap = parser.parse_swap_by_sig(sig, wallet=addr)
+print(swap.symbol)  # => "BONK" (instead of raw mint address)
 ```
+
+### Low-level parsing (no RPC)
+
+```python
+from dexray import parse_swap
+
+# If you already have the raw transaction dict from getTransaction:
+swap = parse_swap(raw_tx, wallet="your_wallet_address")
+```
+
+### Helius migration
+
+```python
+from dexray import to_helius_format, parse_swap
+
+swap = parse_swap(raw_tx, wallet)
+helius_like = to_helius_format(swap)
+# => Same structure as Helius Enhanced Transaction response
+```
+
+See [Migration Guide](docs/MIGRATION.md) for detailed field mapping.
+
+## API Reference
+
+### `SolanaParser(rpc=None, resolver=None)`
+
+Main entry point. Uses free Solana public RPC by default.
+
+| Method | Description |
+|--------|-------------|
+| `parse_swap_by_sig(sig, wallet)` | Fetch and parse a single transaction |
+| `parse_wallet(wallet, limit=300)` | Parse a wallet's recent swap history |
+
+### `parse_swap(tx, wallet) → Swap | None`
+
+Pure function. Parse a raw `getTransaction` response into a `Swap`. Returns `None` if the transaction is not a swap.
+
+### `Swap` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `direction` | `str` | `"BUY"` or `"SELL"` |
+| `mint` | `str` | Token mint address |
+| `symbol` | `str` | Token symbol (if resolver is used) |
+| `sol_amount` | `float` | SOL spent (BUY) or received (SELL) |
+| `usdc_amount` | `float` | USDC/USDT amount (if stablecoin pair) |
+| `token_amount` | `float` | Token amount received (BUY) or sent (SELL) |
+| `timestamp` | `int` | Unix timestamp |
+| `signature` | `str` | Transaction signature |
+| `source` | `str` | DEX name (e.g., `"JUPITER"`, `"RAYDIUM"`) |
+| `program` | `str` | DEX program address |
+
+### `MultiRPC(endpoints=None, max_retries=3, timeout=30.0)`
+
+| Method | Description |
+|--------|-------------|
+| `get_transaction(sig)` | Fetch a single transaction |
+| `get_signatures(address, limit)` | Fetch recent signatures for an address |
+| `batch_get_transactions(sigs, batch_size=10)` | Batch fetch transactions |
+
+### `TokenResolver(preload=True, cache_file=None)`
+
+| Method | Description |
+|--------|-------------|
+| `resolve(mint)` | Get symbol for a mint address |
+| `batch_resolve(mints)` | Resolve multiple mints |
+| `add(mint, symbol)` | Manually add a mapping |
 
 ## Project Structure
 
 ```
 dexray/
 ├── dexray/
-│   ├── __init__.py          # Package entry point
-│   ├── core.py              # Shared types & interfaces
-│   ├── solana/
-│   │   ├── __init__.py
-│   │   ├── parser.py        # Swap parser (pre/postTokenBalances approach)
-│   │   ├── rpc.py           # Multi-RPC client with rotation & retry
-│   │   ├── metadata.py      # Token symbol/decimals resolver
-│   │   └── compat.py        # Helius Enhanced API compatible output (optional)
+│   ├── __init__.py          # Package exports
+│   ├── core.py              # Swap dataclass
+│   └── solana/
+│       ├── __init__.py
+│       ├── parser.py        # Swap parser (balance-diff approach)
+│       ├── rpc.py           # Multi-RPC client with rotation
+│       ├── metadata.py      # Token symbol resolver
+│       └── compat.py        # Helius compatibility layer
 ├── tests/
-│   ├── test_parser.py
-│   ├── test_rpc.py
-│   └── fixtures/            # Real transaction samples for testing
-├── examples/
-│   ├── parse_wallet.py      # Parse a wallet's trading history
-│   ├── live_monitor.py      # WebSocket live trade monitor
-│   └── migrate_helius.py    # Migration guide from Helius
+│   ├── test_parser.py       # Parser unit tests
+│   ├── test_rpc.py          # RPC client tests
+│   ├── test_metadata.py     # Metadata resolver tests
+│   ├── test_integration.py  # Real transaction integration tests
+│   ├── test_compat.py       # Helius compat tests
+│   └── fixtures/            # Real mainnet transaction samples
 ├── docs/
-│   ├── ARCHITECTURE.md      # Technical design & decisions
-│   ├── DEVELOPMENT.md       # Developer guide
-│   └── MIGRATION.md         # Helius → DexRay migration guide
-├── README.md
-├── setup.py
+│   ├── ARCHITECTURE.md      # Technical design
+│   ├── DEVELOPMENT.md       # Development guide
+│   └── MIGRATION.md         # Helius migration guide
 ├── pyproject.toml
-└── LICENSE
+├── LICENSE
+└── README.md
 ```
+
+## Testing
+
+```bash
+git clone https://github.com/0788lance-lab/dexray.git
+cd dexray
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+73 tests covering: Jupiter, Raydium, PumpSwap, USDC pairs, failed transactions, ATA creation/closure, and more.
 
 ## Contributing
 
-Contributions welcome! See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup and guidelines.
+Contributions welcome! See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development setup.
+
+1. Fork the repo
+2. Create a feature branch
+3. Add tests for your changes
+4. Submit a PR
 
 ## License
 
-MIT
+[MIT](LICENSE)
