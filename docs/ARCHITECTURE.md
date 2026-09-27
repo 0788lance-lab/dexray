@@ -33,103 +33,81 @@ User Request  ───→  │  MultiRPC   │  ← rotates across providers
                            │
               ┌────────────┼────────────┐
               ▼            ▼            ▼
-         [dRPC]      [Alchemy]     [Helius]     ← free tier providers
+         [Solana]     [Alchemy]     [dRPC]     ← free tier providers
               │            │            │
               └────────────┼────────────┘
                            ▼
-                    ┌─────────────┐
-                    │ getTransaction │  ← standard Solana RPC
-                    │ (jsonParsed)   │
-                    └──────┬──────┘
+                    ┌──────────────┐
+                    │getTransaction│  ← standard Solana RPC
+                    │ (jsonParsed) │
+                    └──────┬───────┘
                            ▼
                     ┌─────────────┐
                     │   Parser    │  ← balance-diff logic
-                    │             │
-                    │ pre/post    │
-                    │ Balances    │
+                    │  pre/post   │
+                    │  Balances   │
                     └──────┬──────┘
                            ▼
                     ┌─────────────┐
-                    │  Swap Data  │  → {direction, mint, sol_amount, ...}
+                    │  Swap Data  │  → Swap(direction, mint, sol_amount, ...)
                     └─────────────┘
 ```
 
-## Solana Module Design
+## Module Design
 
 ### parser.py — Core Swap Parser
 
-Input: Raw `getTransaction` response (jsonParsed encoding)
+Input: Raw `getTransaction` response (jsonParsed encoding, `maxSupportedTransactionVersion: 0`)
 
 Processing:
-1. Identify fee payer from `accountKeys[0]`
-2. Compute SOL change: `(postBalances[i] - preBalances[i] + fee) / 1e9`
-3. Compute token changes from `preTokenBalances` / `postTokenBalances`:
-   - Match by `accountIndex` to find wallet's token accounts
-   - Calculate delta for each mint
-4. Classify:
+1. Check `meta.err` — skip failed transactions
+2. Find wallet in `accountKeys` (handles both string and `{"pubkey": ...}` formats)
+3. Compute SOL change: `(postBalances[i] - preBalances[i] + fee) / LAMPORTS_PER_SOL`
+4. Compute token changes from `preTokenBalances` / `postTokenBalances`:
+   - Match by `owner` field to find wallet's token accounts
+   - Skip WSOL mint to avoid double-counting with native SOL
+   - Handle asymmetric pre/post (new ATA only in post, closed ATA only in pre)
+5. Classify:
+   - Stablecoin pair takes priority (USDC/USDT change + token change)
    - SOL decreased + token increased → BUY
    - SOL increased + token decreased → SELL
-   - USDC/USDT decreased + token increased → BUY (stablecoin pair)
-   - USDC/USDT increased + token decreased → SELL (stablecoin pair)
-5. Extract amounts, mint address, timestamp, signature
+6. Identify DEX from top-level and inner instruction `programId`s
 
-Output:
-```python
-{
-    "direction":    "BUY" | "SELL",
-    "mint":         "TokenMintAddress...",
-    "symbol":       "BONK",               # resolved via metadata
-    "sol_amount":   0.5,                   # SOL spent/received
-    "usdc_amount":  0.0,                   # USDC spent/received (if stablecoin pair)
-    "token_amount": 1000000.0,             # tokens received (BUY) or sent (SELL)
-    "timestamp":    1695849600,
-    "signature":    "5abc123...",
-    "program":      "JUP6Lkb...",          # DEX program ID
-    "source":       "JUPITER",             # human-readable DEX name
-}
-```
+Output: `Swap` dataclass or `None` (if not a detectable swap)
 
 ### rpc.py — Multi-RPC Client
 
-Features:
-- Round-robin rotation across providers
-- Automatic failover on 429/500 errors
-- Per-provider rate limiting (configurable)
-- Batch RPC support (multiple calls in one HTTP request)
-- Health check & provider scoring
-
 ```python
 class MultiRPC:
-    def __init__(self, endpoints: list[str]):
+    def __init__(self, endpoints=None):  # defaults to Solana public RPC
         ...
 
-    def get_transaction(self, sig: str) -> dict:
-        """Fetch with automatic rotation and retry."""
-
-    def get_signatures(self, address: str, limit: int) -> list[str]:
-        """Fetch signatures with pagination."""
-
-    def batch_get_transactions(self, sigs: list[str], batch_size: int = 10) -> list[dict]:
-        """Batch fetch with rate limiting."""
+    def get_transaction(self, sig: str) -> dict | None:
+    def get_signatures(self, address: str, limit: int) -> list[dict]:
+    def batch_get_transactions(self, sigs: list[str], batch_size: int = 10) -> list[dict | None]:
 ```
+
+Features:
+- Round-robin rotation across providers
+- Automatic failover on 429/500/502/503 errors
+- Exponential backoff after all providers fail
+- Per-provider rate limiting (configurable RPS)
+- Batch JSON-RPC support (multiple calls in one HTTP request)
 
 ### metadata.py — Token Metadata Resolver
 
-Resolve mint addresses to symbols and decimals:
-- Cache results in memory + local file
-- Primary: Solana token metadata program (on-chain)
-- Fallback: Jupiter token list API (free, no auth)
+Resolve mint addresses to symbols:
+- Memory cache + local file cache (`~/.dexray/token_cache.json`)
+- Preload: Jupiter strict token list (~1000 verified tokens)
+- Lazy fallback: Jupiter all-tokens list (loaded once on first cache miss)
 
 ### compat.py — Helius Compatibility Layer (Optional)
 
-For projects migrating from Helius Enhanced API:
 ```python
-from dexray.solana.compat import to_helius_format
+from dexray import to_helius_format
 
-raw_tx = rpc.get_transaction(sig)
-swap = parser.parse_swap(raw_tx, wallet)
 helius_like = to_helius_format(swap)
-# => same structure as Helius Enhanced Transaction response
+# => Same structure as Helius Enhanced Transaction response
 ```
 
 ## Edge Cases & Handling
@@ -139,10 +117,11 @@ helius_like = to_helius_format(swap)
 | Multi-hop swap (A→B→C) | Balance-diff captures net result automatically |
 | Partial fill | Treated as normal swap with actual amounts |
 | Failed transaction | `meta.err` is not null → skip |
-| Wrap/Unwrap SOL | SOL ↔ WSOL, detect via WSOL mint address |
-| Token-to-token (no SOL) | Detect as two token balance changes |
-| Multiple swaps in one tx | Return list of swaps (rare but possible) |
-| Airdrop / transfer (not swap) | Only SOL or only token changes → not a swap → skip |
+| Wrap/Unwrap SOL | WSOL excluded from token balances; SOL from native balances only |
+| USDC/USDT pair | Stablecoin takes priority over small SOL fee changes |
+| First buy (new ATA) | Token only in postTokenBalances → handled via union merge |
+| Full sell (ATA closed) | Token only in preTokenBalances → handled via union merge |
+| Airdrop / transfer | Only SOL or only token changes → not a swap → skip |
 
 ## Performance Targets
 
@@ -152,4 +131,3 @@ helius_like = to_helius_format(swap)
 | RPC fetch + parse | < 200ms per transaction |
 | Batch throughput | 500+ tx/min with 3 free RPC providers |
 | Wallet scan (300 sigs) | < 60 seconds |
-| Memory usage | < 50MB for 10,000 tx cache |

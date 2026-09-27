@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dexray"
 version = "0.1.0"
-description = "Decode any DEX swap from raw on-chain transactions. No paid APIs required."
+description = "Decode Solana DEX swaps from raw transactions. No paid APIs required."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -29,10 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ws = ["websockets>=11.0"]
 dev = [
     "pytest>=7.0",
-    "pytest-asyncio>=0.21",
 ]
 
 [project.urls]

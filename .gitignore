@@ -12,4 +12,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 *.log
+.DS_Store
+.idea/
+.vscode/
 token_cache.json
