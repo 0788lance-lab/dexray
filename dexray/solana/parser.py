@@ -194,8 +194,8 @@ def parse_wallet(rpc: MultiRPC, wallet: str, limit: int = 300) -> list[Swap]:
 class SolanaParser:
     """Thin wrapper for convenient swap parsing."""
 
-    def __init__(self, rpc: MultiRPC, resolver: TokenResolver | None = None):
-        self._rpc = rpc
+    def __init__(self, rpc: MultiRPC | None = None, resolver: TokenResolver | None = None):
+        self._rpc = rpc or MultiRPC()
         self._resolver = resolver
 
     def _resolve_symbol(self, swap: Swap) -> Swap:

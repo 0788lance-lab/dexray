@@ -7,6 +7,10 @@ from typing import Any
 
 _TX_PARAMS = {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}
 
+DEFAULT_ENDPOINTS = [
+    {"url": "https://api.mainnet-beta.solana.com", "rps": 5},
+]
+
 
 class _Provider:
     __slots__ = ("url", "rps", "last_request_time")
@@ -32,10 +36,12 @@ class MultiRPC:
 
     def __init__(
         self,
-        endpoints: list[str | dict],
+        endpoints: list[str | dict] | None = None,
         max_retries: int = 3,
         timeout: float = 30.0,
     ):
+        if endpoints is None:
+            endpoints = DEFAULT_ENDPOINTS
         self._providers: list[_Provider] = []
         for ep in endpoints:
             if isinstance(ep, dict):

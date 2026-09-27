@@ -1,7 +1,7 @@
 """DexRay Solana module — parse Solana DEX swaps from raw transactions."""
 
 from .parser import SolanaParser, parse_swap
-from .rpc import MultiRPC
+from .rpc import MultiRPC, DEFAULT_ENDPOINTS
 from .metadata import TokenResolver
 from .compat import to_helius_format
 
