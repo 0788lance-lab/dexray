@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-73%20passed-brightgreen.svg)](#테스트)
+[![Tests](https://img.shields.io/badge/tests-155%20passed-brightgreen.svg)](#테스트)
 
 [English](README.md) | [中文](README_CN.md) | [日本語](README_JA.md) | [한국어](README_KO.md)
 
@@ -136,6 +136,9 @@ python -m dexray parse <서명> <지갑주소>
 
 # 지갑의 최근 스왑 스캔
 python -m dexray scan <지갑주소> --limit 50
+
+# 파싱 품질 점검 (DEX별 실제 스왑 샘플링 후 검증)
+python -m dexray check --per-dex 50
 ```
 
 ## 테스트

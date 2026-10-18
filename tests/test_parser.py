@@ -4,6 +4,7 @@ import pytest
 
 from dexray.solana.parser import (
     parse_swap,
+    QUOTE_PRIORITY,
     parse_wallet,
     SolanaParser,
     WSOL,
@@ -251,8 +252,8 @@ class TestStablecoinPair:
 # ---------------------------------------------------------------------------
 
 class TestWSOL:
-    def test_wsol_in_token_balances_ignored(self):
-        """WSOL changes in tokenBalances should not be counted."""
+    def test_wsol_folded_into_sol_leg(self):
+        """WSOL token balance changes count toward the SOL leg, not as a token."""
         tx = _make_tx(
             pre_sol=1_000_000_000,
             post_sol=500_000_000,
@@ -269,6 +270,29 @@ class TestWSOL:
         assert swap is not None
         assert swap.direction == "BUY"
         assert swap.mint == TOKEN_MINT
+        assert swap.sol_amount == pytest.approx(0.999995)
+        assert swap.quote_mint == WSOL
+
+    def test_sell_into_persistent_wsol_account(self):
+        """Proceeds land in a WSOL account that stays open; native SOL unchanged."""
+        tx = _make_tx(
+            pre_sol=1_000_000_000,
+            post_sol=1_000_000_000 - 5000,
+            fee=5000,
+            pre_token_balances=[
+                _token_balance(WALLET, WSOL, 0.1, decimals=9),
+                _token_balance(WALLET, TOKEN_MINT, 3000.0),
+            ],
+            post_token_balances=[
+                _token_balance(WALLET, WSOL, 0.35, decimals=9),
+                _token_balance(WALLET, TOKEN_MINT, 0.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap is not None
+        assert swap.direction == "SELL"
+        assert swap.sol_amount == pytest.approx(0.25)
+        assert swap.token_amount == 3000.0
 
 
 # ---------------------------------------------------------------------------
@@ -508,3 +532,210 @@ class TestSolanaParser:
         parser = SolanaParser(MockRPC())
         swap = parser.parse_swap_by_sig("sig1", WALLET)
         assert swap.symbol == ""
+
+
+# ---------------------------------------------------------------------------
+# quote asset (quote_mint / quote_amount)
+# ---------------------------------------------------------------------------
+
+OTHER_MINT = "OtherTokenMint987654321"
+RELAYER = "RelayerFeePayer111"
+
+
+class TestQuote:
+    def test_sol_quote(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=500_000_000, fee=5000,
+            post_token_balances=[_token_balance(WALLET, TOKEN_MINT, 1000.0)],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.quote_mint == WSOL
+        assert swap.quote_amount == swap.sol_amount == pytest.approx(0.499995)
+        assert swap.usdc_amount == 0.0
+
+    def test_usdc_quote(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, USDC, 500.0)],
+            post_token_balances=[
+                _token_balance(WALLET, USDC, 400.0),
+                _token_balance(WALLET, TOKEN_MINT, 1000.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.quote_mint == USDC
+        assert swap.quote_amount == 100.0
+        assert swap.sol_amount == 0.0
+
+    def test_usdt_quote_is_not_reported_as_usdc_mint(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, USDT, 500.0)],
+            post_token_balances=[
+                _token_balance(WALLET, USDT, 300.0),
+                _token_balance(WALLET, TOKEN_MINT, 1000.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.quote_mint == USDT
+        assert swap.quote_amount == 200.0
+
+    def test_amounts_from_raw_integers(self):
+        """uiAmount floats carry noise; amounts come from raw integer amounts."""
+        pre = _token_balance(WALLET, USDC, 0.0)
+        post = _token_balance(WALLET, USDC, 0.0)
+        pre["uiTokenAmount"].update(amount="1000000000", uiAmount=1000.0000000001)
+        post["uiTokenAmount"].update(amount="993504657", uiAmount=993.5046569999)
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000, fee=5000,
+            pre_token_balances=[pre],
+            post_token_balances=[post, _token_balance(WALLET, TOKEN_MINT, 10.0)],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.quote_amount == 6.495343
+
+    def test_token_accounts_of_same_mint_are_summed(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=500_000_000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, TOKEN_MINT, 100.0)],
+            post_token_balances=[
+                _token_balance(WALLET, TOKEN_MINT, 100.0),
+                _token_balance(WALLET, TOKEN_MINT, 250.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.token_amount == 250.0
+
+    def test_token_to_token(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, OTHER_MINT, 900.0)],
+            post_token_balances=[
+                _token_balance(WALLET, OTHER_MINT, 0.0),
+                _token_balance(WALLET, TOKEN_MINT, 42.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.direction == "BUY"
+        assert swap.mint == TOKEN_MINT
+        assert swap.quote_mint == OTHER_MINT
+        assert swap.quote_amount == 900.0
+        assert swap.sol_amount == 0.0
+
+    def test_token_to_token_with_ata_rent(self):
+        """SOL spent on a new ATA does not turn a token swap into a SOL buy."""
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000 - 2_039_280, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, OTHER_MINT, 900.0)],
+            post_token_balances=[
+                _token_balance(WALLET, OTHER_MINT, 0.0),
+                _token_balance(WALLET, TOKEN_MINT, 42.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.quote_mint == OTHER_MINT
+
+    def test_large_sol_outflow_is_not_token_to_token(self):
+        """Token out + LP token in + lots of SOL out looks like adding liquidity."""
+        tx = _make_tx(
+            pre_sol=5_000_000_000, post_sol=3_000_000_000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, OTHER_MINT, 900.0)],
+            post_token_balances=[
+                _token_balance(WALLET, OTHER_MINT, 0.0),
+                _token_balance(WALLET, TOKEN_MINT, 42.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap is None or swap.quote_mint != OTHER_MINT
+
+    def test_sol_to_usdc(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=950_000_000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, USDC, 1.0)],
+            post_token_balances=[_token_balance(WALLET, USDC, 11.0)],
+        )
+        swap = parse_swap(tx, WALLET)
+        assert swap.direction == "SELL"
+        assert swap.mint == WSOL
+        assert swap.token_amount == pytest.approx(0.049995)
+        assert swap.quote_mint == USDC
+        assert swap.quote_amount == 10.0
+
+    def test_usdc_received_with_rent_is_not_a_swap(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000 - 2_039_280, fee=5000,
+            post_token_balances=[_token_balance(WALLET, USDC, 50.0)],
+        )
+        assert parse_swap(tx, WALLET) is None
+
+    def test_custom_quote_priority(self):
+        tx = _make_tx(
+            pre_sol=1_000_000_000, post_sol=1_000_000_000 - 5000, fee=5000,
+            pre_token_balances=[_token_balance(WALLET, OTHER_MINT, 900.0)],
+            post_token_balances=[
+                _token_balance(WALLET, OTHER_MINT, 0.0),
+                _token_balance(WALLET, TOKEN_MINT, 42.0),
+            ],
+        )
+        swap = parse_swap(tx, WALLET, quote_mints=(OTHER_MINT,) + QUOTE_PRIORITY)
+        assert swap.direction == "BUY"
+        assert swap.quote_mint == OTHER_MINT
+        swap = parse_swap(tx, WALLET, quote_mints=(TOKEN_MINT,) + QUOTE_PRIORITY)
+        assert swap.direction == "SELL"
+        assert swap.mint == OTHER_MINT
+
+
+# ---------------------------------------------------------------------------
+# trader / fee payer
+# ---------------------------------------------------------------------------
+
+def _relayer_tx(trader_pre_sol, trader_post_sol, fee=11534, extra_signer=None):
+    """Relayer pays the fee; the trader co-signs and buys TOKEN_MINT."""
+    tx = _make_tx(
+        fee=fee,
+        account_keys=[
+            {"pubkey": RELAYER, "signer": True, "writable": True},
+            {"pubkey": WALLET, "signer": True, "writable": True},
+        ] + ([{"pubkey": extra_signer, "signer": True, "writable": True}] if extra_signer else []),
+        post_token_balances=[_token_balance(WALLET, TOKEN_MINT, 6254.070163)],
+    )
+    tx["meta"]["preBalances"] = [5_000_000_000, trader_pre_sol, 0]
+    tx["meta"]["postBalances"] = [5_000_000_000 - fee, trader_post_sol, 0]
+    return tx
+
+
+class TestTraderAttribution:
+    def test_fee_not_added_back_when_relayer_pays(self):
+        swap = parse_swap(_relayer_tx(1_000_000_000, 592_000_000), WALLET)
+        assert swap.sol_amount == 0.408
+        assert swap.trader == WALLET
+        assert swap.fee_payer == RELAYER
+
+    def test_self_paid_fee_payer_is_trader(self):
+        tx = _make_tx(post_token_balances=[_token_balance(WALLET, TOKEN_MINT, 1.0)])
+        swap = parse_swap(tx, WALLET)
+        assert swap.trader == swap.fee_payer == WALLET
+
+    def test_infer_trader_relayer(self):
+        swap = parse_swap(_relayer_tx(1_000_000_000, 592_000_000))
+        assert swap.trader == WALLET
+        assert swap.fee_payer == RELAYER
+
+    def test_infer_trader_ignores_non_owner_signers(self):
+        """Extra signers that own no token accounts (e.g. a new mint keypair) are skipped."""
+        swap = parse_swap(_relayer_tx(1_000_000_000, 592_000_000, extra_signer="MintKeypair"))
+        assert swap.trader == WALLET
+
+    def test_infer_trader_self_paid(self):
+        tx = _make_tx(
+            account_keys_as_dicts=True,
+            post_token_balances=[_token_balance(WALLET, TOKEN_MINT, 1.0)],
+        )
+        assert parse_swap(tx).trader == WALLET
+
+    def test_to_dict_has_new_fields(self):
+        d = parse_swap(_relayer_tx(1_000_000_000, 592_000_000), WALLET).to_dict()
+        assert d["quote_mint"] == WSOL
+        assert d["quote_amount"] == 0.408
+        assert d["trader"] == WALLET
+        assert d["fee_payer"] == RELAYER

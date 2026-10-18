@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dexray.core import Swap
-from dexray.solana.parser import parse_swap, LAMPORTS_PER_SOL
+from dexray.solana.parser import parse_swap, LAMPORTS_PER_SOL, WSOL
 
 
 def to_helius_format(swap: Swap) -> dict:
@@ -11,10 +11,22 @@ def to_helius_format(swap: Swap) -> dict:
 
     Field mapping follows docs/MIGRATION.md.
     """
-    native_amount = int(swap.sol_amount * LAMPORTS_PER_SOL)
+    native_amount = int(round(swap.sol_amount * LAMPORTS_PER_SOL))
+    # Non-SOL quote leg (USDC, USDT, or the other token of a token-to-token swap)
+    quote_leg = None
+    if swap.quote_mint and swap.quote_mint != WSOL and swap.quote_amount > 0:
+        quote_leg = {
+            "fromUserAccount": "",
+            "toUserAccount": "",
+            "mint": swap.quote_mint,
+            "tokenAmount": swap.quote_amount,
+            "tokenStandard": "Fungible",
+        }
 
     token_transfers = []
     if swap.direction == "BUY":
+        if quote_leg:
+            token_transfers.append(quote_leg)
         if swap.sol_amount > 0:
             token_transfers.append({
                 "fromUserAccount": "",
@@ -38,6 +50,8 @@ def to_helius_format(swap: Swap) -> dict:
             "tokenAmount": swap.token_amount,
             "tokenStandard": "Fungible",
         })
+        if quote_leg:
+            token_transfers.append(quote_leg)
         if swap.sol_amount > 0:
             token_transfers.append({
                 "fromUserAccount": "",
@@ -83,6 +97,21 @@ def to_helius_format(swap: Swap) -> dict:
             },
         }
 
+    if quote_leg:
+        quote_token = {
+            "userAccount": "",
+            "tokenAccount": "",
+            "mint": swap.quote_mint,
+            "rawTokenAmount": {
+                "tokenAmount": str(swap.quote_amount),
+                "decimals": 0,
+            },
+        }
+        if swap.direction == "BUY":
+            token_input = quote_token
+        else:
+            token_output = quote_token
+
     swap_event = {}
     if native_input:
         swap_event["nativeInput"] = native_input
@@ -98,6 +127,7 @@ def to_helius_format(swap: Swap) -> dict:
         "source": swap.source,
         "signature": swap.signature,
         "timestamp": swap.timestamp,
+        "feePayer": swap.fee_payer,
         "tokenTransfers": token_transfers,
         "events": {
             "swap": swap_event,

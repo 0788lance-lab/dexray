@@ -51,6 +51,40 @@ def _make_usdc_buy_swap() -> Swap:
     )
 
 
+def _make_usdc_quote_sell_swap() -> Swap:
+    return Swap(
+        direction="SELL",
+        mint="TokenMint789",
+        symbol="MEME",
+        sol_amount=0.0,
+        usdc_amount=6.495343,
+        token_amount=20000.0,
+        timestamp=1700003000,
+        signature="usdcsellsig",
+        source="RAYDIUM_CPMM",
+        program="CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+        quote_mint="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        quote_amount=6.495343,
+        trader="Trader111",
+        fee_payer="Relayer111",
+    )
+
+
+class TestQuoteLeg:
+    def test_usdc_quote_leg_and_fee_payer(self):
+        result = to_helius_format(_make_usdc_quote_sell_swap())
+        transfers = result["tokenTransfers"]
+        assert [t["mint"] for t in transfers] == [
+            "TokenMint789", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        ]
+        assert transfers[1]["tokenAmount"] == 6.495343
+        event = result["events"]["swap"]
+        assert event["tokenInputs"][0]["mint"] == "TokenMint789"
+        assert event["tokenOutputs"][0]["mint"] == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        assert "nativeOutput" not in event
+        assert result["feePayer"] == "Relayer111"
+
+
 class TestToHeliusFormat:
     def test_buy_structure(self):
         result = to_helius_format(_make_buy_swap())

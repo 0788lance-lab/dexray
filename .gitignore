@@ -16,3 +16,4 @@ venv/
 .idea/
 .vscode/
 token_cache.json
+quality_reports/

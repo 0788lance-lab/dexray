@@ -208,7 +208,7 @@ class TestGetTransaction:
         params = payload["params"]
         assert params[0] == "mysig"
         assert params[1]["encoding"] == "jsonParsed"
-        assert params[1]["maxSupportedTransactionVersion"] == 0
+        assert params[1]["maxSupportedTransactionVersion"] == 1
 
 
 # ---------------------------------------------------------------------------
