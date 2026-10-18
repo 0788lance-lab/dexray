@@ -57,21 +57,24 @@ User Request  ───→  │  MultiRPC   │  ← rotates across providers
 
 ### parser.py — Core Swap Parser
 
-Input: Raw `getTransaction` response (jsonParsed encoding, `maxSupportedTransactionVersion: 0`)
+Input: Raw `getTransaction` response (jsonParsed encoding, `maxSupportedTransactionVersion: 1`)
 
 Processing:
 1. Check `meta.err` — skip failed transactions
-2. Find wallet in `accountKeys` (handles both string and `{"pubkey": ...}` formats)
-3. Compute SOL change: `(postBalances[i] - preBalances[i] + fee) / LAMPORTS_PER_SOL`
-4. Compute token changes from `preTokenBalances` / `postTokenBalances`:
-   - Match by `owner` field to find wallet's token accounts
-   - Skip WSOL mint to avoid double-counting with native SOL
+2. Resolve the trader: the given `wallet`, or inferred — a non-fee-payer signer that owns changed token accounts (relayer-paid tx), else the fee payer (`accountKeys[0]`)
+3. SOL leg: native `postBalances[i] - preBalances[i]`, plus the fee only if the trader paid it, plus the trader's WSOL token balance change (wrap/unwrap nets out; persistent WSOL accounts are counted)
+4. Token changes from `preTokenBalances` / `postTokenBalances`:
+   - Match by `owner`, sum all of the trader's accounts per mint
+   - Exact amounts from raw integer `amount` + `decimals` (no `uiAmount` float noise)
    - Handle asymmetric pre/post (new ATA only in post, closed ATA only in pre)
-5. Classify:
-   - Stablecoin pair takes priority (USDC/USDT change + token change)
-   - SOL decreased + token increased → BUY
-   - SOL increased + token decreased → SELL
-6. Identify DEX from top-level and inner instruction `programId`s
+5. Pick the quote asset (priority USDC > USDT > SOL, configurable):
+   - A stablecoin moved → it is the quote; small SOL changes are rent/fees
+   - Exactly one token in and one out, SOL outflow under 0.01 → token-to-token, sent token is the quote
+   - Otherwise SOL is the quote
+   - Only quote assets moved (e.g. SOL → USDC) → the lower-priority one is traded, the higher-priority one is the quote
+6. Direction: token in + quote out → BUY; token out + quote in → SELL
+   - Another token moving the same way as the quote (two assets in, or two out) → liquidity op, not a swap
+7. Identify DEX from the outermost DEX calls (lowest `stackHeight`; an aggregator wrapping its legs wins): the first one whose accounts include the token mint (the leg that delivered it), else the first one
 
 Output: `Swap` dataclass or `None` (if not a detectable swap)
 
@@ -117,7 +120,9 @@ helius_like = to_helius_format(swap)
 | Multi-hop swap (A→B→C) | Balance-diff captures net result automatically |
 | Partial fill | Treated as normal swap with actual amounts |
 | Failed transaction | `meta.err` is not null → skip |
-| Wrap/Unwrap SOL | WSOL excluded from token balances; SOL from native balances only |
+| Wrap/Unwrap SOL | WSOL merged into the SOL leg; wrap/unwrap nets out |
+| Relayer-paid (gasless) tx | Trader = signer, fee not deducted from trader; `fee_payer` reported separately |
+| Version 1 tx | Fetched with `maxSupportedTransactionVersion: 1` (version 0 makes the RPC refuse them) |
 | USDC/USDT pair | Stablecoin takes priority over small SOL fee changes |
 | First buy (new ATA) | Token only in postTokenBalances → handled via union merge |
 | Full sell (ATA closed) | Token only in preTokenBalances → handled via union merge |

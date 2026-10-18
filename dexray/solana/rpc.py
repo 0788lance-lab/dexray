@@ -5,7 +5,10 @@ import requests
 from typing import Any
 
 
-_TX_PARAMS = {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}
+# Highest tx version we can parse. With a lower value the RPC refuses newer
+# txs (-32015 "Transaction version (1) is not supported") instead of returning them.
+MAX_TX_VERSION = 1
+_TX_PARAMS = {"encoding": "jsonParsed", "maxSupportedTransactionVersion": MAX_TX_VERSION}
 
 DEFAULT_ENDPOINTS = [
     {"url": "https://api.mainnet-beta.solana.com", "rps": 5},

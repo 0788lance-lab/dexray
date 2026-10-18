@@ -24,6 +24,29 @@ pytest tests/ -v
 All tests must pass before submitting a PR. Tests in `tests/fixtures/` use
 recorded mainnet transactions so no RPC calls are needed.
 
+## Parser Fixes Need a Real Transaction
+
+Every fix to swap parsing must ship with the mainnet transaction it got wrong,
+saved as a regression fixture:
+
+```bash
+python scripts/add_fixture.py <signature> --name <short_label> \
+    --note "what was wrong" [--wallet <trader>]
+```
+
+The script stores the raw transaction plus the current parse as the expected
+result in `tests/fixtures/regression/`, and prints the trader's raw balance
+changes. Check the expected values against them before committing.
+`tests/test_regression.py` then checks every fixture three ways: the pinned
+expected fields, an independent re-computation from integer balances, and
+trader inference without a wallet. No synthetic-only fixes.
+
+## Data Quality Check
+
+`python -m dexray check` samples recent swaps for every DEX program, parses
+them, and scores the parser against raw balance changes (see
+[docs/QUALITY.md](docs/QUALITY.md)). Run it before releasing parser changes.
+
 ## Code Style
 
 - Python 3.10+ (use modern type hints: `dict[str, int]`, `list[str] | None`)
@@ -56,7 +79,7 @@ When filing a bug report, please include:
 To add detection for a new DEX program:
 
 1. Add the program ID to `DEX_PROGRAMS` in `dexray/solana/parser.py`
-2. Add a test case in `tests/test_parser.py` with a real transaction fixture
+2. Add a regression fixture for a real swap on it (`scripts/add_fixture.py`)
 3. The balance-diff approach should work automatically for any DEX
 
 ## License

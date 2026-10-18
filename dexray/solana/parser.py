@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from typing import Iterable
+
 from dexray.core import Swap
 from dexray.solana.rpc import MultiRPC
 from dexray.solana.metadata import TokenResolver
@@ -10,13 +13,21 @@ WSOL = "So11111111111111111111111111111111111111112"
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 LAMPORTS_PER_SOL = 1_000_000_000
-QUOTE_MINTS = {WSOL, USDC, USDT}
+STABLECOINS = {USDC, USDT}
+QUOTE_PRIORITY = (USDC, USDT, WSOL)
+QUOTE_MINTS = set(QUOTE_PRIORITY)
+# SOL changes below this can be rent (new ATAs), tips and priority fees rather
+# than a swap leg; only used where SOL is not the obvious quote.
+SOL_DUST = Decimal("0.01")
+# Multi-hop routes can leave a few raw units of an intermediate token behind.
+TOKEN_DUST = Decimal("0.000001")
 
+JUPITER = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
 DEX_PROGRAMS: dict[str, str] = {
-    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "JUPITER",
+    JUPITER: "JUPITER",
     "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": "RAYDIUM",
     "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C": "RAYDIUM_CPMM",
-    "CAMMCzo5YL8w4VFF8KVHr7Wfao2BjNrHsgzb5i4Qi6Mc": "RAYDIUM_CLMM",
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK": "RAYDIUM_CLMM",
     "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": "PUMP_AMM",
     "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA": "PUMPSWAP",
     "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "ORCA",
@@ -29,148 +40,191 @@ def _account_key(entry) -> str:
     return entry["pubkey"] if isinstance(entry, dict) else entry
 
 
-def _token_amount(bal_entry: dict) -> float:
+def _signers(message: dict) -> list[str]:
+    keys = message.get("accountKeys", [])
+    if keys and isinstance(keys[0], dict):
+        return [k["pubkey"] for k in keys if k.get("signer")]
+    n = message.get("header", {}).get("numRequiredSignatures", 1)
+    return [_account_key(k) for k in keys[:n]]
+
+
+def _token_amount(bal_entry: dict) -> Decimal:
+    """Exact human-unit amount: raw integer amount scaled by decimals."""
     ui = bal_entry.get("uiTokenAmount", {})
-    val = ui.get("uiAmount")
-    if val is not None:
-        return float(val)
-    s = ui.get("uiAmountString", "0")
-    return float(s)
+    raw, decimals = ui.get("amount"), ui.get("decimals")
+    if raw is not None and decimals is not None:
+        return Decimal(int(raw)).scaleb(-int(decimals))
+    val = ui.get("uiAmountString")
+    if val is None:
+        val = ui.get("uiAmount")
+    return Decimal(str(val)) if val is not None else Decimal(0)
 
 
-def _detect_dex(tx: dict) -> tuple[str, str]:
-    """Return (program_id, source_name) from instructions."""
-    instructions = tx.get("transaction", {}).get("message", {}).get("instructions", [])
-    for ix in instructions:
-        pid = ix.get("programId", "")
-        if pid in DEX_PROGRAMS:
-            return pid, DEX_PROGRAMS[pid]
+def _token_deltas(meta: dict, owner: str) -> dict[str, Decimal]:
+    """Net balance change per mint across all of owner's token accounts."""
+    deltas: dict[str, Decimal] = {}
+    for side, sign in (("preTokenBalances", -1), ("postTokenBalances", 1)):
+        for entry in meta.get(side) or []:
+            mint = entry.get("mint", "")
+            if entry.get("owner") != owner:
+                continue
+            deltas[mint] = deltas.get(mint, Decimal(0)) + sign * _token_amount(entry)
+    return {m: d for m, d in deltas.items() if d != 0}
 
-    inner = tx.get("meta", {}).get("innerInstructions", []) or []
-    for group in inner:
-        for ix in group.get("instructions", []):
-            pid = ix.get("programId", "")
-            if pid in DEX_PROGRAMS:
-                return pid, DEX_PROGRAMS[pid]
 
-    return "", "UNKNOWN"
+def _infer_trader(meta: dict, fee_payer: str, signers: list[str]) -> str:
+    """Pick the trading wallet when none is given.
+
+    Relayer-paid txs have the relayer as fee payer and the trader as a
+    co-signer that owns the token accounts being changed.
+    """
+    owners = {
+        entry.get("owner")
+        for side in ("preTokenBalances", "postTokenBalances")
+        for entry in meta.get(side) or []
+    }
+    for signer in signers:
+        if signer != fee_payer and signer in owners:
+            return signer
+    return fee_payer
+
+
+def _detect_dex(tx: dict, mint: str = "") -> tuple[str, str]:
+    """Return (program_id, source_name) from instructions.
+
+    Only the outermost DEX calls count: an aggregator (e.g. Jupiter) invoking
+    DEX legs is the source, not its legs. Among outermost calls -- e.g. a
+    router doing USDC -> SOL on Raydium CLMM, then SOL -> token on PumpSwap --
+    the first one touching ``mint`` wins, else the first one.
+    """
+    calls = [(1, ix) for ix in tx.get("transaction", {}).get("message", {}).get("instructions", [])]
+    for group in tx.get("meta", {}).get("innerInstructions", []) or []:
+        calls.extend((ix.get("stackHeight") or 2, ix) for ix in group.get("instructions", []))
+
+    dex_calls = [(h, ix) for h, ix in calls if ix.get("programId", "") in DEX_PROGRAMS]
+    if not dex_calls:
+        return "", "UNKNOWN"
+    top = min(h for h, _ in dex_calls)
+    outer = [ix for h, ix in dex_calls if h == top]
+    pid = next((ix["programId"] for ix in outer if mint and mint in ix.get("accounts", [])),
+               outer[0]["programId"])
+    return pid, DEX_PROGRAMS[pid]
 
 
 def parse_swap(
     tx: dict,
-    wallet: str,
-    quote_mints: set[str] | None = None,
+    wallet: str | None = None,
+    quote_mints: Iterable[str] | None = None,
 ) -> Swap | None:
-    """Parse a single transaction into a Swap. Returns None if not a swap."""
-    if quote_mints is None:
-        quote_mints = QUOTE_MINTS
+    """Parse a single transaction into a Swap. Returns None if not a swap.
+
+    wallet: the trader to parse for. When omitted, it is inferred: the
+        non-fee-payer signer owning changed token accounts (relayer-paid tx),
+        else the fee payer.
+    quote_mints: quote assets in priority order; WSOL stands for native SOL.
+        Defaults to USDC, USDT, SOL.
+    """
+    priority = tuple(quote_mints) if quote_mints is not None else QUOTE_PRIORITY
     meta = tx.get("meta")
     if not meta or meta.get("err") is not None:
         return None
 
-    # Find wallet index in accountKeys
-    account_keys = tx.get("transaction", {}).get("message", {}).get("accountKeys", [])
-    wallet_idx = None
-    for i, key in enumerate(account_keys):
-        if _account_key(key) == wallet:
-            wallet_idx = i
-            break
-    if wallet_idx is None:
+    message = tx.get("transaction", {}).get("message", {})
+    account_keys = [_account_key(k) for k in message.get("accountKeys", [])]
+    if not account_keys:
         return None
+    fee_payer = account_keys[0]
+    trader = wallet if wallet is not None else _infer_trader(meta, fee_payer, _signers(message))
+    if trader not in account_keys:
+        return None
+    trader_idx = account_keys.index(trader)
 
-    # SOL change (add back fee since fee isn't part of the swap)
+    # Native SOL change. The network fee is not part of the swap, but only the
+    # fee payer pays it -- in relayer-paid txs the trader's balance never saw it.
     pre_balances = meta.get("preBalances", [])
     post_balances = meta.get("postBalances", [])
-    fee = meta.get("fee", 0)
-    sol_change = 0.0
-    if wallet_idx < len(pre_balances) and wallet_idx < len(post_balances):
-        sol_change = (post_balances[wallet_idx] - pre_balances[wallet_idx] + fee) / LAMPORTS_PER_SOL
+    lamports = 0
+    if trader_idx < len(pre_balances) and trader_idx < len(post_balances):
+        lamports = post_balances[trader_idx] - pre_balances[trader_idx]
+        if trader == fee_payer:
+            lamports += meta.get("fee", 0)
 
-    # Token changes -- build {mint: amount} for pre and post
-    pre_tokens: dict[str, float] = {}
-    post_tokens: dict[str, float] = {}
+    # SOL leg = native + WSOL. Wrapping/unwrapping moves value between the two
+    # and nets out; a persistent WSOL account can hold the whole swap leg.
+    deltas = _token_deltas(meta, trader)
+    sol = deltas.pop(WSOL, Decimal(0)) + Decimal(lamports).scaleb(-9)
+    if WSOL in priority and sol:
+        deltas[WSOL] = sol
 
-    for entry in meta.get("preTokenBalances", []):
-        owner = entry.get("owner", "")
-        mint = entry.get("mint", "")
-        if owner == wallet and mint != WSOL:
-            pre_tokens[mint] = _token_amount(entry)
-
-    for entry in meta.get("postTokenBalances", []):
-        owner = entry.get("owner", "")
-        mint = entry.get("mint", "")
-        if owner == wallet and mint != WSOL:
-            post_tokens[mint] = _token_amount(entry)
-
-    # Compute deltas for all mints seen
-    all_mints = set(pre_tokens.keys()) | set(post_tokens.keys())
-    token_deltas: dict[str, float] = {}
-    for mint in all_mints:
-        pre_val = pre_tokens.get(mint, 0.0)
-        post_val = post_tokens.get(mint, 0.0)
-        delta = post_val - pre_val
-        if delta != 0.0:
-            token_deltas[mint] = delta
-
-    # Separate quote and non-quote token changes
-    stablecoin_mints = {USDC, USDT}
-    quote_delta: dict[str, float] = {}
-    target_delta: dict[str, float] = {}
-
-    for mint, delta in token_deltas.items():
-        if mint in stablecoin_mints:
-            quote_delta[mint] = delta
-        else:
-            target_delta[mint] = delta
-
-    # Determine swap direction
-    direction = None
+    targets = {m: d for m, d in deltas.items() if m not in priority}
     swap_mint = ""
-    swap_token_amount = 0.0
-    swap_sol_amount = abs(sol_change)
-    swap_usdc_amount = 0.0
+    quote_mint = ""
+    if not targets:
+        # Quote-to-quote (e.g. SOL -> USDC): the lower-priority asset is the one
+        # traded. A SOL leg has to exceed rent/tip noise to count.
+        moved = [m for m in priority if m in deltas and (m != WSOL or abs(deltas[m]) >= SOL_DUST)]
+        if len(moved) != 2:
+            return None
+        quote_mint, swap_mint = moved
+        targets = {swap_mint: deltas[swap_mint]}
+    else:
+        # Non-SOL quotes first: when a stablecoin moved, a small SOL change is
+        # just rent/fees, not part of the swap.
+        for mint in priority:
+            if mint != WSOL and mint in deltas:
+                quote_mint = mint
+                break
+    if not quote_mint:
+        bought = [m for m in targets if targets[m] > 0]
+        sold = [m for m in targets if targets[m] < 0]
+        if len(bought) == 1 and len(sold) == 1 and deltas.get(WSOL, Decimal(0)) > -SOL_DUST:
+            # Token-to-token: report it as buying the received token with the
+            # sent one; the small SOL change is rent/tips. A bigger SOL outflow
+            # means SOL was a leg too (e.g. adding liquidity), not this case.
+            swap_mint, quote_mint = bought[0], sold[0]
+        elif WSOL in deltas:
+            quote_mint = WSOL
+    if not quote_mint:
+        return None
+    if not swap_mint:
+        swap_mint = max(targets, key=lambda m: abs(targets[m]))
 
-    if target_delta:
-        # Pick the target token (largest absolute change if multiple)
-        swap_mint = max(target_delta, key=lambda m: abs(target_delta[m]))
-        swap_token_amount = abs(target_delta[swap_mint])
-        token_increased = target_delta[swap_mint] > 0
-
-        # Check stablecoin pair first -- when a stablecoin changed significantly,
-        # any small SOL change is just fee compensation, not part of the swap.
-        total_quote = sum(quote_delta.values()) if quote_delta else 0.0
-        if quote_delta and abs(total_quote) > 1e-6:
-            if total_quote < 0 and token_increased:
-                direction = "BUY"
-                swap_sol_amount = 0.0
-                swap_usdc_amount = abs(total_quote)
-            elif total_quote > 0 and not token_increased:
-                direction = "SELL"
-                swap_sol_amount = 0.0
-                swap_usdc_amount = abs(total_quote)
-        elif sol_change < -1e-9 and token_increased:
-            direction = "BUY"
-        elif sol_change > 1e-9 and not token_increased:
-            direction = "SELL"
-
-    if direction is None:
+    token_delta = targets[swap_mint]
+    quote_delta = deltas[quote_mint]
+    if token_delta > 0 and quote_delta < 0:
+        direction = "BUY"
+    elif token_delta < 0 and quote_delta > 0:
+        direction = "SELL"
+    else:
         return None
 
+    # Liquidity ops move two assets the same way (both in on withdraw, both out
+    # on deposit, e.g. closing a CLMM position); a swap has one asset per side.
+    for mint, delta in targets.items():
+        if mint not in (swap_mint, quote_mint) and (delta > 0) == (quote_delta > 0) \
+                and abs(delta) >= TOKEN_DUST:
+            return None
+
+    quote_amount = float(abs(quote_delta))
     timestamp = tx.get("blockTime", 0)
     signature = (tx.get("transaction", {}).get("signatures") or [""])[0]
-    program, source = _detect_dex(tx)
+    program, source = _detect_dex(tx, swap_mint)
 
     return Swap(
         direction=direction,
         mint=swap_mint,
         symbol="",
-        sol_amount=swap_sol_amount,
-        usdc_amount=swap_usdc_amount,
-        token_amount=swap_token_amount,
+        sol_amount=quote_amount if quote_mint == WSOL else 0.0,
+        usdc_amount=quote_amount if quote_mint in STABLECOINS else 0.0,
+        token_amount=float(abs(token_delta)),
         timestamp=timestamp,
         signature=signature,
         source=source,
         program=program,
+        quote_mint=quote_mint,
+        quote_amount=quote_amount,
+        trader=trader,
+        fee_payer=fee_payer,
     )
 
 

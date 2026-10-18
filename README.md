@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-73%20passed-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-155%20passed-brightgreen.svg)](#testing)
 
 [English](README.md) | [中文](README_CN.md) | [日本語](README_JA.md) | [한국어](README_KO.md)
 
@@ -81,9 +81,13 @@ Instead of relying on proprietary "enhanced" transaction parsing, DexRay reads t
 Raw Transaction (getTransaction RPC)
   → Compare preTokenBalances vs postTokenBalances
   → Detect token flow direction
-  → SOL out + token in = BUY
-  → SOL in + token out = SELL
+  → SOL/USDC/USDT out + token in = BUY
+  → token out + SOL/USDC/USDT in = SELL
 ```
+
+Amounts come from the raw integer balances (no float drift), and the trader is the
+signing wallet, not the fee payer, so relayer-paid ("gasless") swaps are attributed
+correctly.
 
 This works **regardless of which DEX** was used — Jupiter, Raydium, Pump.fun, Orca, Meteora, or any future DEX — because we read balance changes, not program-specific instructions.
 
@@ -92,7 +96,10 @@ This works **regardless of which DEX** was used — Jupiter, Raydium, Pump.fun, 
 - **Zero config** — works out of the box with Solana public RPC, no API keys needed
 - **Multi-RPC rotation** — add multiple free RPC providers for higher throughput
 - **Universal DEX support** — Jupiter, Raydium, Pump.fun, Orca, Meteora, and any future DEX
-- **USDC/USDT pairs** — handles stablecoin quote pairs, not just SOL
+- **Any quote asset** — SOL, USDC, USDT, token-to-token; `quote_mint` + `quote_amount` on every swap
+- **Relayer-aware** — `trader` (signer) and `fee_payer` reported separately
+- **All tx versions** — legacy, v0 and v1 transactions
+- **Live quality check** — `python -m dexray check` scores the parser against real mainnet swaps
 - **Token metadata** — resolve mint addresses to symbols via Jupiter token list
 - **Batch processing** — efficient bulk transaction parsing with rate limiting
 - **Helius compatible** — optional compatibility layer for easy migration
@@ -186,6 +193,9 @@ from dexray import parse_swap
 
 # If you already have the raw transaction dict from getTransaction:
 swap = parse_swap(raw_tx, wallet="your_wallet_address")
+
+# No wallet: the trader is inferred (the signing wallet, even when a relayer paid the fee)
+swap = parse_swap(raw_tx)
 ```
 
 ### Helius migration
@@ -211,9 +221,12 @@ Main entry point. Uses free Solana public RPC by default.
 | `parse_swap_by_sig(sig, wallet)` | Fetch and parse a single transaction |
 | `parse_wallet(wallet, limit=300)` | Parse a wallet's recent swap history |
 
-### `parse_swap(tx, wallet) → Swap | None`
+### `parse_swap(tx, wallet=None, quote_mints=None) → Swap | None`
 
 Pure function. Parse a raw `getTransaction` response into a `Swap`. Returns `None` if the transaction is not a swap.
+
+- `wallet` — trader to parse for. Omit it to infer the trader: the co-signer that owns the changed token accounts when a relayer paid the fee, otherwise the fee payer.
+- `quote_mints` — quote assets in priority order (default USDC, USDT, SOL, with the WSOL mint standing for SOL). A swap between two non-quote tokens is reported as buying the received token with the sent one.
 
 ### `Swap` fields
 
@@ -222,13 +235,17 @@ Pure function. Parse a raw `getTransaction` response into a `Swap`. Returns `Non
 | `direction` | `str` | `"BUY"` or `"SELL"` |
 | `mint` | `str` | Token mint address |
 | `symbol` | `str` | Token symbol (if resolver is used) |
-| `sol_amount` | `float` | SOL spent (BUY) or received (SELL) |
-| `usdc_amount` | `float` | USDC/USDT amount (if stablecoin pair) |
+| `sol_amount` | `float` | SOL spent (BUY) or received (SELL); 0 if the quote isn't SOL |
+| `usdc_amount` | `float` | USDC/USDT amount (if stablecoin pair); prefer `quote_amount` |
 | `token_amount` | `float` | Token amount received (BUY) or sent (SELL) |
 | `timestamp` | `int` | Unix timestamp |
 | `signature` | `str` | Transaction signature |
 | `source` | `str` | DEX name (e.g., `"JUPITER"`, `"RAYDIUM"`) |
 | `program` | `str` | DEX program address |
+| `quote_mint` | `str` | Asset paid (BUY) or received (SELL); WSOL mint for SOL |
+| `quote_amount` | `float` | `quote_mint` amount in human units |
+| `trader` | `str` | Wallet whose balances were parsed |
+| `fee_payer` | `str` | `accountKeys[0]`; differs from `trader` for relayer-paid txs |
 
 ### `MultiRPC(endpoints=None, max_retries=3, timeout=30.0)`
 
@@ -258,17 +275,23 @@ dexray/
 │       ├── parser.py        # Swap parser (balance-diff approach)
 │       ├── rpc.py           # Multi-RPC client with rotation
 │       ├── metadata.py      # Token symbol resolver
-│       └── compat.py        # Helius compatibility layer
+│       ├── compat.py        # Helius compatibility layer
+│       └── quality.py       # Live data-quality check
+├── scripts/
+│   └── add_fixture.py       # Save a mainnet tx as a regression fixture
 ├── tests/
 │   ├── test_parser.py       # Parser unit tests
 │   ├── test_rpc.py          # RPC client tests
 │   ├── test_metadata.py     # Metadata resolver tests
 │   ├── test_integration.py  # Real transaction integration tests
 │   ├── test_compat.py       # Helius compat tests
+│   ├── test_regression.py   # Real txs the parser once got wrong
+│   ├── test_quality.py      # Quality checker tests
 │   └── fixtures/            # Real mainnet transaction samples
 ├── docs/
 │   ├── ARCHITECTURE.md      # Technical design
 │   ├── DEVELOPMENT.md       # Development guide
+│   ├── QUALITY.md           # Data-quality check and baseline
 │   └── MIGRATION.md         # Helius migration guide
 ├── pyproject.toml
 ├── LICENSE
@@ -284,7 +307,16 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-73 tests covering: Jupiter, Raydium, PumpSwap, USDC pairs, failed transactions, ATA creation/closure, and more.
+155 tests covering: Jupiter, Raydium, PumpSwap, USDC pairs, relayer-paid swaps, v0/v1/legacy transactions, failed transactions, ATA creation/closure, and more.
+`tests/test_regression.py` replays real mainnet transactions the parser once got wrong; every parser fix adds one (see [CONTRIBUTING](CONTRIBUTING.md)).
+
+### Live data-quality check
+
+```bash
+python -m dexray check --per-dex 50
+```
+
+Samples recent swaps for every supported DEX, parses them, and checks direction and amounts against the raw on-chain balance changes. Exits non-zero and alerts (Telegram/Slack, optional) when a DEX drops below 98%. Runs weekly in CI. See [docs/QUALITY.md](docs/QUALITY.md).
 
 ## Contributing
 

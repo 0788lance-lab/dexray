@@ -16,7 +16,7 @@ pytest tests/ -v
 - [x] Core swap parser (balance-diff approach)
 - [x] Token metadata resolver (Jupiter + cache)
 - [x] Helius compatibility layer
-- [x] Unit tests (73 tests, all passing)
+- [x] Unit tests (155 tests, all passing)
 - [x] Real transaction fixtures (7 mainnet transactions)
 - [ ] CI (GitHub Actions)
 - [ ] Publish to PyPI

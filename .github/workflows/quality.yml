@@ -1,0 +1,50 @@
+name: Data quality
+
+# Weekly live check: sample real swaps per DEX, score the parser against raw
+# balance changes. A failed run means some DEX dropped below the threshold.
+on:
+  schedule:
+    - cron: "0 3 * * 1"  # Mondays 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      per_dex:
+        description: "txs sampled per DEX"
+        default: "50"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      # Past reports feed the trend table; each run saves a new cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: quality_reports
+          key: quality-reports-${{ github.run_id }}
+          restore-keys: quality-reports-
+      - name: Run check
+        env:
+          RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
+          DEXRAY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEXRAY_TELEGRAM_BOT_TOKEN }}
+          DEXRAY_TELEGRAM_CHAT_ID: ${{ secrets.DEXRAY_TELEGRAM_CHAT_ID }}
+          DEXRAY_SLACK_WEBHOOK: ${{ secrets.DEXRAY_SLACK_WEBHOOK }}
+          PER_DEX: ${{ inputs.per_dex || '50' }}
+        run: |
+          python -m dexray check --per-dex "$PER_DEX" --out quality_reports \
+            ${RPC_URL:+--rpc "$RPC_URL" --rps 10}
+      - name: Publish summary
+        if: always()
+        run: cat "$(ls -t quality_reports/quality-*.md | head -1)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-report-${{ github.run_id }}
+          path: quality_reports/

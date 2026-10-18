@@ -18,7 +18,7 @@ This guide helps projects currently using Helius Enhanced Transactions API migra
 ### 1. Install DexRay
 
 ```bash
-pip install dexray
+pip install git+https://github.com/0788lance-lab/dexray.git
 ```
 
 ### 2. Set Up Multi-RPC
@@ -132,3 +132,18 @@ A: DexRay only replaces Enhanced Transactions parsing. If you use other Helius A
 
 **Q: Is the parsing accuracy the same?**
 A: Yes. The balance-diff approach captures the exact same information. In some edge cases (complex multi-hop swaps), DexRay may actually be more accurate because it reads the final result rather than trying to interpret intermediate steps.
+
+## Upgrading from DexRay 0.1.x to 0.2
+
+Existing code keeps working; `Swap` only gained fields (all with defaults).
+
+- Read the quote side from `swap.quote_mint` / `swap.quote_amount` instead of
+  `sol_amount` / `usdc_amount`. USDC-, USDT- and token-quoted swaps have
+  `sol_amount == 0`; `usdc_amount` also holds USDT amounts.
+- `swap.trader` is the wallet that traded, `swap.fee_payer` is
+  `accountKeys[0]`. They differ for relayer-paid ("gasless") swaps; don't use
+  the fee payer as the trader.
+- If you fetch transactions yourself, request
+  `maxSupportedTransactionVersion: 1`, or the RPC refuses version 1 txs.
+- Amounts for relayer-paid SOL swaps, WSOL-account swaps and some DEX labels
+  change because 0.1.0 got them wrong; see [CHANGELOG](../CHANGELOG.md).

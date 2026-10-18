@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-73%20passed-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-155%20passed-brightgreen.svg)](#测试)
 
 [English](README.md) | [中文](README_CN.md) | [日本語](README_JA.md) | [한국어](README_KO.md)
 
@@ -81,9 +81,11 @@ DexRay 不解析 DEX 特有的指令格式，而是直接读取交易的**最终
 原始交易 (getTransaction RPC)
   → 对比 preTokenBalances 与 postTokenBalances
   → 检测代币流向
-  → SOL 减少 + 代币增加 = 买入 (BUY)
-  → SOL 增加 + 代币减少 = 卖出 (SELL)
+  → SOL/USDC/USDT 减少 + 代币增加 = 买入 (BUY)
+  → 代币减少 + SOL/USDC/USDT 增加 = 卖出 (SELL)
 ```
+
+金额取自原始整数余额（无浮点误差）；trader 是签名的钱包而不是 fee payer，relayer 代付 gas 的交易也能正确归因。
 
 这种方法**适用于所有 DEX** — Jupiter、Raydium、Pump.fun、Orca、Meteora 以及未来的任何 DEX — 因为我们读的是余额变化，而非特定程序的指令。
 
@@ -92,7 +94,10 @@ DexRay 不解析 DEX 特有的指令格式，而是直接读取交易的**最终
 - **零配置** — 开箱即用，内置免费 Solana 公共 RPC，无需 API key
 - **多 RPC 轮换** — 可添加多个免费 RPC 提供商以提高吞吐量
 - **通用 DEX 支持** — Jupiter、Raydium、Pump.fun、Orca、Meteora 以及任何未来 DEX
-- **稳定币交易对** — 支持 USDC/USDT 作为计价货币
+- **任意计价资产** — SOL、USDC、USDT、币币交换；每笔 swap 都带 `quote_mint` + `quote_amount`
+- **识别 relayer** — 分别给出 `trader`（签名者）和 `fee_payer`
+- **全交易版本** — legacy、v0、v1
+- **线上水质检测** — `python -m dexray check` 用真实主网 swap 给解析器打分
 - **代币元数据** — 通过 Jupiter 代币列表解析 mint 地址为代币符号
 - **批量处理** — 高效的批量交易解析，带速率控制
 - **Helius 兼容** — 可选兼容层，便于从 Helius 迁移
@@ -211,9 +216,12 @@ helius_like = to_helius_format(swap)
 | `parse_swap_by_sig(sig, wallet)` | 获取并解析单笔交易 |
 | `parse_wallet(wallet, limit=300)` | 解析钱包的近期 swap 历史 |
 
-### `parse_swap(tx, wallet) → Swap | None`
+### `parse_swap(tx, wallet=None, quote_mints=None) → Swap | None`
 
 纯函数。将 `getTransaction` 的原始响应解析为 `Swap`。非 swap 交易返回 `None`。
+
+- `wallet` — 要解析的交易者。不传时自动推断：relayer 代付时取拥有变动代币账户的共同签名者，否则取 fee payer。
+- `quote_mints` — 按优先级排列的计价资产（默认 USDC、USDT、SOL，SOL 用 WSOL mint 表示）。两个非计价代币互换时，记为"用卖出的代币买入收到的代币"。
 
 ### `Swap` 字段
 
@@ -222,13 +230,17 @@ helius_like = to_helius_format(swap)
 | `direction` | `str` | `"BUY"` 或 `"SELL"` |
 | `mint` | `str` | 代币 mint 地址 |
 | `symbol` | `str` | 代币符号（使用 resolver 时填充） |
-| `sol_amount` | `float` | 花费的 SOL（买入）或收到的 SOL（卖出） |
-| `usdc_amount` | `float` | USDC/USDT 金额（稳定币交易对时） |
+| `sol_amount` | `float` | 花费的 SOL（买入）或收到的 SOL（卖出）；计价不是 SOL 时为 0 |
+| `usdc_amount` | `float` | USDC/USDT 金额（稳定币交易对时）；建议改用 `quote_amount` |
 | `token_amount` | `float` | 收到的代币数量（买入）或卖出的数量（卖出） |
 | `timestamp` | `int` | Unix 时间戳 |
 | `signature` | `str` | 交易签名 |
 | `source` | `str` | DEX 名称（如 `"JUPITER"`、`"RAYDIUM"`） |
 | `program` | `str` | DEX 程序地址 |
+| `quote_mint` | `str` | 付出（买入）或收到（卖出）的计价资产；SOL 用 WSOL mint |
+| `quote_amount` | `float` | `quote_mint` 的数量（人类可读单位） |
+| `trader` | `str` | 被解析余额的钱包 |
+| `fee_payer` | `str` | `accountKeys[0]`；relayer 代付时与 `trader` 不同 |
 
 ### `MultiRPC(endpoints=None, max_retries=3, timeout=30.0)`
 
@@ -258,17 +270,23 @@ dexray/
 │       ├── parser.py        # Swap 解析器（余额差值法）
 │       ├── rpc.py           # 多 RPC 客户端（轮换 + 容错）
 │       ├── metadata.py      # 代币符号解析器
-│       └── compat.py        # Helius 兼容层
+│       ├── compat.py        # Helius 兼容层
+│       └── quality.py       # 线上水质检测
+├── scripts/
+│   └── add_fixture.py       # 把主网交易存为回归用例
 ├── tests/
 │   ├── test_parser.py       # 解析器单元测试
 │   ├── test_rpc.py          # RPC 客户端测试
 │   ├── test_metadata.py     # 元数据解析器测试
 │   ├── test_integration.py  # 真实交易集成测试
 │   ├── test_compat.py       # Helius 兼容测试
+│   ├── test_regression.py   # 解析器曾经搞错的真实交易
+│   ├── test_quality.py      # 水质检测测试
 │   └── fixtures/            # 真实主网交易样本
 ├── docs/
 │   ├── ARCHITECTURE.md      # 技术架构
 │   ├── DEVELOPMENT.md       # 开发指南
+│   ├── QUALITY.md           # 水质检测与基线
 │   └── MIGRATION.md         # Helius 迁移指南
 ├── pyproject.toml
 ├── LICENSE
@@ -284,7 +302,16 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-73 个测试，覆盖：Jupiter、Raydium、PumpSwap、USDC 交易对、失败交易、ATA 创建/关闭等场景。
+155 个测试，覆盖：Jupiter、Raydium、PumpSwap、USDC 交易对、relayer 代付、v0/v1/legacy 交易、失败交易、ATA 创建/关闭等场景。
+`tests/test_regression.py` 回放解析器曾经搞错的真实主网交易；每个解析修复都要附带一笔（见 [CONTRIBUTING](CONTRIBUTING.md)）。
+
+### 线上水质检测
+
+```bash
+python -m dexray check --per-dex 50
+```
+
+按 DEX 抽样最近的真实 swap，解析后用链上原始余额差值核对方向和金额。某家 DEX 成功率低于 98% 时以非零码退出并告警（可选 Telegram/Slack）。CI 每周跑一次。详见 [docs/QUALITY.md](docs/QUALITY.md)。
 
 ## 贡献
 
