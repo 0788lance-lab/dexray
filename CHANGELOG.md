@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-10-18
+
+Cleaner data on real mainnet traffic, plus a live check that it stays that way.
 
 ### Added
 - `Swap.quote_mint` / `Swap.quote_amount`: the asset and amount on the other side of every swap (SOL, USDC, USDT, or the sent token in token-to-token swaps). `sol_amount` / `usdc_amount` are kept for compatibility.
@@ -11,6 +13,14 @@
 - `python -m dexray check`: live data-quality check per DEX against raw balance changes, with weekly report, trend and Telegram/Slack alerts; weekly GitHub Actions workflow.
 - Regression suite of real mainnet transactions (`tests/test_regression.py`) and `scripts/add_fixture.py`.
 - Helius compat: non-SOL quote leg in `tokenTransfers` / swap event, `feePayer`.
+
+### Changed
+- `parse_swap(tx, wallet)`: `wallet` is now optional.
+- `quote_mints` is an ordered priority list (it was accepted but unused before).
+- WSOL token balances count toward the SOL leg instead of being ignored.
+- Two assets moving the same way on the quote side (liquidity add/remove) returns `None` instead of a swap.
+- DEX labels for multi-hop routes may differ from 0.1.0 (see Fixed).
+- `MultiRPC` requests `maxSupportedTransactionVersion: 1`.
 
 ### Fixed
 - Version 1 transactions: RPC requests now send `maxSupportedTransactionVersion: 1`; with `0` the RPC refused them (-32015).
@@ -35,3 +45,6 @@
 - CLI tool (`python -m dexray`)
 - 73 unit and integration tests
 - Multilingual documentation (English, 中文, 日本語, 한국어)
+
+[0.2.0]: https://github.com/0788lance-lab/dexray/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/0788lance-lab/dexray/releases/tag/v0.1.0

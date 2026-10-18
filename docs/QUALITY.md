@@ -65,8 +65,11 @@ program ID). **Warnings** (report only): fewer than 10 scored swaps.
 `.github/workflows/quality.yml` runs every Monday 03:00 UTC (and on demand).
 A failing run is the alert; the report is in the run summary and as an
 artifact, and past reports are restored from the Actions cache for the trend.
-Optional repo secrets: `SOLANA_RPC_URL` (otherwise public RPC), plus the
-notification variables above.
+No secrets are required: without `SOLANA_RPC_URL` it uses the public RPC
+(~30 min per run), and a failed run already notifies the repo owner through
+GitHub's standard workflow emails. Scheduled workflows don't run on forks
+until enabled there; if you run your own, optionally add `SOLANA_RPC_URL` and
+the notification variables above as secrets in your repo.
 
 Local cron alternative:
 
